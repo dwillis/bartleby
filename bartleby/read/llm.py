@@ -32,3 +32,27 @@ def summarize_pdf_page(
     except Exception as e:
         logger.error(f"Summarization failed with ({type(e).__name__}): {e}")
         return ""
+
+
+def summarize_text(llm, body: str) -> str:
+    """
+    Generate a summary of a text document.
+
+    Args:
+        llm: Language model to use for summarization
+        body: Text content to summarize
+
+    Returns:
+        Summary text, or empty string if summarization fails
+    """
+    if len(body) > MAX_INPUT_CHARACTERS:
+        body = body[:MAX_INPUT_CHARACTERS]
+
+    content = f"Provide a comprehensive summary of this document:\n\n{body}"
+
+    try:
+        response = llm.invoke([HumanMessage(content=content)])
+        return (getattr(response, "content", "") or "").strip()
+    except Exception as e:
+        logger.error(f"Summarization failed with ({type(e).__name__}): {e}")
+        return ""

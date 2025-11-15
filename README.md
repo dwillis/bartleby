@@ -1,6 +1,6 @@
 # Bartleby, the Scrivener
 
-A powerful PDF processing tool that extracts text, generates embeddings, and optionally creates LLM-powered summaries.
+A powerful document processing tool that extracts text from PDFs, text files, and JSON files, generates embeddings, and optionally creates LLM-powered summaries.
 
 ---
 
@@ -66,16 +66,33 @@ This inits your `bartleby` instance, asking for everything it needs.
 2. **Run anywhere**:
 
 ```bash
+# Process PDFs (backward compatible)
 bartleby read --pdfs path/to/pdfs --db path/to/db
+
+# Process any supported document type
+bartleby read --input path/to/documents --db path/to/db
+
+# Process text files
+bartleby read --input path/to/texts --input-type text --db path/to/db
+
+# Process JSON files with specific attributes
+bartleby read --input data.json --input-type json --json-attributes "title,content,metadata.author" --db path/to/db
 ```
 
 ### Options
 
 **`bartleby ready`** - Interactive configuration wizard
 
-**`bartleby read`** - Process PDFs
-- `--pdfs` (required): Path to a single PDF file or directory containing PDFs
+**`bartleby read`** - Process documents (PDFs, text files, or JSON files)
+- `--input`: Path to a file or directory containing documents (supports PDF, text, or JSON)
+- `--pdfs` (deprecated): Use `--input` instead. Path to a single PDF file or directory containing PDFs
 - `--db` (required): Path to database directory (created automatically if it doesn't exist)
+- `--input-type`: File type - `auto` (default, detect from extension), `pdf`, `text`, or `json`
+- `--json-attributes`: Comma-separated list of JSON attributes to extract (e.g., `title,content,metadata.author`)
+- `--max-workers`: Maximum number of parallel workers (default: from config or 4)
+- `--model`: LLM model name for summarization (optional)
+- `--provider`: LLM provider (`anthropic` or `openai`)
+- `--verbose`: Enable verbose logging
 
 **`bartleby write`** - Write a report
 - `--db` (required): Path to a database directory you've created with `bartleby read`.
@@ -84,12 +101,34 @@ bartleby read --pdfs path/to/pdfs --db path/to/db
 
 ## What `read` does
 
-1. **Extracts text** from PDFs using PyMuPDF
-2. **OCR fallback** for image-based pages using Tesseract
-3. **Chunks text** intelligently using LangChain text splitters
-4. **Generates embeddings** using sentence-transformers (BAAI/bge-base-en-v1.5)
-5. **Creates summaries** (optional) for the first N pages using vision-capable LLMs
-6. **Stores everything** in SQLite with full-text search (FTS5) and vector search (vec0)
+1. **Extracts text** from multiple document formats:
+   - **PDFs**: Using PyMuPDF with OCR fallback (Tesseract) for image-based pages
+   - **Text files**: Direct reading with automatic encoding detection (.txt, .md, .rst)
+   - **JSON files**: Attribute extraction with support for nested fields (.json, .jsonl)
+2. **Chunks text** intelligently using LangChain text splitters (400 chars with 50 char overlap)
+3. **Generates embeddings** using sentence-transformers (BAAI/bge-base-en-v1.5, 768 dimensions)
+4. **Creates summaries** (optional) for the first N pages/documents using LLMs
+5. **Stores everything** in SQLite with full-text search (FTS5) and vector search (sqlite-vec)
+
+### Supported File Types
+
+- **PDF** (.pdf): Full PDF processing with OCR fallback
+- **Text** (.txt, .md, .rst, .text, .markdown): Plain text and markdown files
+- **JSON** (.json, .jsonl): Single JSON objects or JSON Lines format with attribute extraction
+
+### JSON Attribute Extraction
+
+When processing JSON files, you can specify which attributes to extract using the `--json-attributes` flag:
+
+```bash
+# Extract specific fields
+bartleby read --input data.json --json-attributes "title,content" --db ./db
+
+# Extract nested fields using dot notation
+bartleby read --input data.json --json-attributes "title,content,metadata.author,metadata.date" --db ./db
+```
+
+For JSONL (JSON Lines) files, each line is treated as a separate "page" in the database.
 
 ## What `write` does
 

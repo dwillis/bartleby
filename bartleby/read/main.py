@@ -11,19 +11,46 @@ from bartleby.lib.console import send
 from bartleby.lib.consts import DEFAULT_MAX_WORKERS, EMBEDDING_MODEL
 from bartleby.lib.utils import load_config
 from bartleby.read.processor import process_pdf
+from bartleby.read.text_processor import process_text
+from bartleby.read.json_processor import process_json
 from bartleby.read.sqlite import get_connection
 
 
-def _process_pdf_worker(args):
+# File type mappings
+FILE_TYPE_EXTENSIONS = {
+    'pdf': ['.pdf'],
+    'text': ['.txt', '.md', '.rst', '.text', '.markdown'],
+    'json': ['.json', '.jsonl']
+}
+
+
+def detect_file_type(file_path: Path) -> str:
+    """
+    Detect file type based on extension.
+
+    Args:
+        file_path: Path to file
+
+    Returns:
+        File type: 'pdf', 'text', 'json', or 'unknown'
+    """
+    ext = file_path.suffix.lower()
+    for file_type, extensions in FILE_TYPE_EXTENSIONS.items():
+        if ext in extensions:
+            return file_type
+    return 'unknown'
+
+
+def _process_document_worker(args):
     """
     Worker function for multiprocessing - creates its own connection, embedding model, and LLM.
     Must be at module level to be picklable.
 
     Args:
-        args: Tuple of (pdf_file, db_path, archive_path, provider, model, llm_has_vision,
-                       pdf_pages_to_summarize, config, verbose)
+        args: Tuple of (file_path, file_type, db_path, archive_path, provider, model, llm_has_vision,
+                       pdf_pages_to_summarize, json_attributes, config, verbose)
     """
-    pdf_file, db_path, archive_path, provider, model, llm_has_vision, pdf_pages_to_summarize, config, verbose = args
+    file_path, file_type, db_path, archive_path, provider, model, llm_has_vision, pdf_pages_to_summarize, json_attributes, config, verbose = args
 
     # Configure logging in worker process
     logger.remove()  # Remove default handler
@@ -61,21 +88,62 @@ def _process_pdf_worker(args):
             llm = ChatOllama(model=model, base_url=base_url)
 
     try:
-        process_pdf(
-            connection,
-            pdf_file,
-            db_path,
-            archive_path,
-            process_embedding_model,
-            llm,
-            llm_has_vision,
-            pdf_pages_to_summarize
-        )
+        # Route to appropriate processor based on file type
+        if file_type == 'pdf':
+            process_pdf(
+                connection,
+                file_path,
+                db_path,
+                archive_path,
+                process_embedding_model,
+                llm,
+                llm_has_vision,
+                pdf_pages_to_summarize
+            )
+        elif file_type == 'text':
+            process_text(
+                connection,
+                file_path,
+                db_path,
+                archive_path,
+                process_embedding_model,
+                llm,
+                llm_has_vision,
+                pdf_pages_to_summarize
+            )
+        elif file_type == 'json':
+            # Parse JSON attributes if provided
+            attributes = None
+            if json_attributes:
+                attributes = [attr.strip() for attr in json_attributes.split(',')]
+
+            process_json(
+                connection,
+                file_path,
+                db_path,
+                archive_path,
+                process_embedding_model,
+                attributes,
+                llm,
+                llm_has_vision,
+                pdf_pages_to_summarize
+            )
+        else:
+            logger.error(f"Unsupported file type: {file_type} for {file_path}")
     finally:
         connection.close()
 
 
-def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider: str = None, verbose: bool = False):
+def main(
+    db_path,
+    input_path,
+    input_type: str = "auto",
+    json_attributes: str = None,
+    max_workers: int = None,
+    model: str = None,
+    provider: str = None,
+    verbose: bool = False
+):
     # Configure logging level
     logger.remove()  # Remove default handler
     if verbose:
@@ -109,7 +177,7 @@ def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider
             logger.debug(f"Using {provider} API key from config")
 
     db_path = Path(db_path)
-    pdf_path = Path(pdf_path)
+    input_path = Path(input_path)
     archive_path = db_path.parent / "archive"
     archive_path.mkdir(parents=True, exist_ok=True)
 
@@ -135,39 +203,63 @@ def main(db_path, pdf_path, max_workers: int = None, model: str = None, provider
         else:
             send(f"Unknown provider: {provider}", "WARN")
 
-    # Collect PDF files to process
-    pdf_files = []
-    if pdf_path.is_file():
-        pdf_files = [pdf_path]
-    elif pdf_path.is_dir():
-        pdf_files = list(pdf_path.rglob("*.pdf"))
+    # Collect files to process based on input type
+    files_to_process = []
+    if input_path.is_file():
+        # Single file
+        detected_type = detect_file_type(input_path) if input_type == "auto" else input_type
+        if detected_type == 'unknown':
+            raise ValueError(f"Unknown file type for {input_path}. Please specify --input-type")
+        files_to_process = [(input_path, detected_type)]
+    elif input_path.is_dir():
+        # Directory: collect files based on input type
+        if input_type == "auto":
+            # Collect all supported file types
+            for file_type, extensions in FILE_TYPE_EXTENSIONS.items():
+                for ext in extensions:
+                    files_to_process.extend([(f, file_type) for f in input_path.rglob(f"*{ext}")])
+        else:
+            # Collect only files of specified type
+            extensions = FILE_TYPE_EXTENSIONS.get(input_type, [])
+            for ext in extensions:
+                files_to_process.extend([(f, input_type) for f in input_path.rglob(f"*{ext}")])
     else:
-        raise ValueError(f"Invalid pdf_path: {pdf_path}")
+        raise ValueError(f"Invalid input_path: {input_path}")
 
-    send(f"Processing {len(pdf_files)} document(s) with {max_workers} workers", "BIG")
+    if not files_to_process:
+        send(f"No files found to process in {input_path}", "WARN")
+        return
+
+    # Show summary of file types
+    type_counts = {}
+    for _, file_type in files_to_process:
+        type_counts[file_type] = type_counts.get(file_type, 0) + 1
+
+    type_summary = ", ".join([f"{count} {ftype}" for ftype, count in type_counts.items()])
+    send(f"Processing {len(files_to_process)} document(s) ({type_summary}) with {max_workers} workers", "BIG")
 
     # Use ProcessPoolExecutor instead of ThreadPoolExecutor for SentenceTransformer thread-safety
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         # Prepare arguments for each worker (must be picklable - can't pass LLM objects)
         worker_args = [
-            (pdf_file, db_path, archive_path, provider, model, llm_has_vision,
-             pdf_pages_to_summarize, config, verbose)
-            for pdf_file in pdf_files
+            (file_path, file_type, db_path, archive_path, provider, model, llm_has_vision,
+             pdf_pages_to_summarize, json_attributes, config, verbose)
+            for file_path, file_type in files_to_process
         ]
 
         futures = {
-            executor.submit(_process_pdf_worker, args): args[0]
+            executor.submit(_process_document_worker, args): args[0]
             for args in worker_args
         }
 
-        with tqdm(total=len(pdf_files), desc="Processing documents", unit="doc") as pbar:
+        with tqdm(total=len(files_to_process), desc="Processing documents", unit="doc") as pbar:
             for future in as_completed(futures):
-                pdf_file = futures[future]
+                file_path = futures[future]
                 try:
                     future.result()
-                    logger.debug(f"Successfully processed: {pdf_file}")
+                    logger.debug(f"Successfully processed: {file_path}")
                 except Exception as e:
-                    send(f"Failed to process {pdf_file.name}: {e}", "ERROR")
+                    send(f"Failed to process {file_path.name}: {e}", "ERROR")
                 finally:
                     pbar.update(1)
 

@@ -19,18 +19,37 @@ def main():
     ready_parser = subparsers.add_parser("ready", help="Configure Bartleby settings")
 
     # Read command
-    read_parser = subparsers.add_parser("read", help="Process PDF documents")
+    read_parser = subparsers.add_parser("read", help="Process documents (PDF, text, or JSON)")
+    read_parser.add_argument(
+        "--input",
+        required=False,
+        type=str,
+        help="Path to a file or directory containing documents (PDF, text, or JSON)"
+    )
     read_parser.add_argument(
         "--pdfs",
-        required=True,
+        required=False,
         type=str,
-        help="Path to a PDF file or directory containing PDFs"
+        help="(Deprecated: use --input) Path to a PDF file or directory containing PDFs"
     )
     read_parser.add_argument(
         "--db",
         required=True,
         type=str,
         help="Path to the database directory (will be created if it doesn't exist)"
+    )
+    read_parser.add_argument(
+        "--input-type",
+        type=str,
+        choices=["auto", "pdf", "text", "json"],
+        default="auto",
+        help="Input file type: auto (detect from extension), pdf, text, or json (default: auto)"
+    )
+    read_parser.add_argument(
+        "--json-attributes",
+        type=str,
+        default=None,
+        help="Comma-separated list of JSON attributes to extract (e.g., 'title,content,metadata.author')"
     )
     read_parser.add_argument(
         "--max-workers",
@@ -85,6 +104,12 @@ def main():
 
         send(message_type="SPLASH")
 
+        # Handle backward compatibility: --pdfs is deprecated, use --input
+        input_path = args.input or args.pdfs
+        if not input_path:
+            send("Error: Either --input or --pdfs is required", "ERROR")
+            sys.exit(1)
+
         db_dir = Path(args.db)
         db_dir.mkdir(parents=True, exist_ok=True)
         db_path = db_dir / "bartleby.db"
@@ -97,7 +122,9 @@ def main():
 
         read_main(
             db_path=db_path,
-            pdf_path=args.pdfs,
+            input_path=input_path,
+            input_type=args.input_type,
+            json_attributes=args.json_attributes,
             max_workers=args.max_workers,
             model=args.model,
             provider=args.provider,

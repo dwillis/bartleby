@@ -36,5 +36,8 @@ dependencies = [
 [project.scripts]
 bartleby = "bartleby.cli:main"
 
+[tool.setuptools]
+packages = ["bartleby", "bartleby.lib", "bartleby.read", "bartleby.ready", "bartleby.write"]
+
 [tool.setuptools.package-data]
 bartleby = ["read/schema.sql"]
