@@ -1,0 +1,11 @@
+{
+  "title": "Understanding Neural Networks",
+  "author": "Dr. Jane Smith",
+  "content": "Neural networks are computing systems inspired by biological neural networks. They consist of interconnected nodes (neurons) organized in layers. Each connection has a weight that adjusts as learning proceeds. Neural networks excel at pattern recognition and can learn complex non-linear relationships in data.",
+  "metadata": {
+    "category": "AI/ML",
+    "date": "2024-01-15",
+    "tags": ["neural networks", "deep learning", "AI"]
+  },
+  "abstract": "This article provides an introduction to neural networks, their structure, and applications in modern artificial intelligence."
+}
