@@ -89,9 +89,11 @@ bartleby read --input data.json --input-type json --json-attributes "title,conte
 - `--db` (required): Path to database directory (created automatically if it doesn't exist)
 - `--input-type`: File type - `auto` (default, detect from extension), `pdf`, `text`, or `json`
 - `--json-attributes`: Comma-separated list of JSON attributes to extract (e.g., `title,content,metadata.author`)
+- `--embedding-provider`: Embedding provider - `sentence-transformers` (local, default), `openai`, or `ollama`
+- `--embedding-model`: Embedding model name (provider-specific, e.g., `BAAI/bge-base-en-v1.5`, `text-embedding-3-small`, `nomic-embed-text`)
 - `--max-workers`: Maximum number of parallel workers (default: from config or 4)
 - `--model`: LLM model name for summarization (optional)
-- `--provider`: LLM provider (`anthropic` or `openai`)
+- `--provider`: LLM provider for summarization (`anthropic` or `openai`)
 - `--verbose`: Enable verbose logging
 
 **`bartleby write`** - Write a report
@@ -129,6 +131,60 @@ bartleby read --input data.json --json-attributes "title,content,metadata.author
 ```
 
 For JSONL (JSON Lines) files, each line is treated as a separate "page" in the database.
+
+### Embedding Providers
+
+Bartleby supports multiple embedding providers for generating vector representations of text:
+
+#### Sentence-Transformers (Local, Default)
+Uses local transformer models from Hugging Face. No API key required.
+
+```bash
+# Use default model (BAAI/bge-base-en-v1.5, 768 dimensions)
+bartleby read --input docs/ --db ./db
+
+# Use a different local model
+bartleby read --input docs/ --db ./db --embedding-provider sentence-transformers --embedding-model "all-MiniLM-L6-v2"
+```
+
+**Popular models**:
+- `BAAI/bge-base-en-v1.5` (768 dim) - Default, good balance of quality and speed
+- `all-MiniLM-L6-v2` (384 dim) - Faster, smaller
+- `all-mpnet-base-v2` (768 dim) - Higher quality
+
+#### OpenAI Embeddings
+Uses OpenAI's embedding API. Requires OpenAI API key.
+
+```bash
+# Requires OPENAI_API_KEY environment variable or in config
+bartleby read --input docs/ --db ./db --embedding-provider openai --embedding-model text-embedding-3-small
+```
+
+**Models**:
+- `text-embedding-3-small` (1536 dim) - Cost-effective, good quality
+- `text-embedding-3-large` (3072 dim) - Highest quality
+- `text-embedding-ada-002` (1536 dim) - Legacy model
+
+#### Ollama Embeddings
+Uses locally-running Ollama models. Requires Ollama to be running.
+
+```bash
+# Requires Ollama running at http://localhost:11434
+bartleby read --input docs/ --db ./db --embedding-provider ollama --embedding-model nomic-embed-text
+```
+
+**Models**:
+- `nomic-embed-text` - General purpose embeddings
+- `mxbai-embed-large` - Larger model for better quality
+- Any other embedding model available in Ollama
+
+#### Important Notes
+
+1. **Database Compatibility**: Once a database is created with a specific embedding dimension, you must use the same embedding provider/model (or one with the same dimension) for all subsequent operations.
+
+2. **Dimension Validation**: Bartleby automatically validates that the embedding model matches the database's expected dimension and will error if there's a mismatch.
+
+3. **Performance**: Local models (sentence-transformers, Ollama) don't require API calls, while OpenAI requires network requests and has usage costs.
 
 ## What `write` does
 

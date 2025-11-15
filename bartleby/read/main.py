@@ -4,16 +4,16 @@ from pathlib import Path
 import sys
 
 from loguru import logger
-from sentence_transformers import SentenceTransformer
 from tqdm import tqdm
 
 from bartleby.lib.console import send
-from bartleby.lib.consts import DEFAULT_MAX_WORKERS, EMBEDDING_MODEL
+from bartleby.lib.consts import DEFAULT_MAX_WORKERS
+from bartleby.lib.embedding_providers import create_embedding_provider
 from bartleby.lib.utils import load_config
 from bartleby.read.processor import process_pdf
 from bartleby.read.text_processor import process_text
 from bartleby.read.json_processor import process_json
-from bartleby.read.sqlite import get_connection
+from bartleby.read.sqlite import get_connection, get_embedding_dimension
 
 
 # File type mappings
@@ -47,10 +47,11 @@ def _process_document_worker(args):
     Must be at module level to be picklable.
 
     Args:
-        args: Tuple of (file_path, file_type, db_path, archive_path, provider, model, llm_has_vision,
+        args: Tuple of (file_path, file_type, db_path, archive_path, embedding_provider_name,
+                       embedding_model_name, provider, model, llm_has_vision,
                        pdf_pages_to_summarize, json_attributes, config, verbose)
     """
-    file_path, file_type, db_path, archive_path, provider, model, llm_has_vision, pdf_pages_to_summarize, json_attributes, config, verbose = args
+    file_path, file_type, db_path, archive_path, embedding_provider_name, embedding_model_name, provider, model, llm_has_vision, pdf_pages_to_summarize, json_attributes, config, verbose = args
 
     # Configure logging in worker process
     logger.remove()  # Remove default handler
@@ -61,8 +62,14 @@ def _process_document_worker(args):
 
     # Each process gets its own connection and embedding model for isolation
     connection = get_connection(db_path)
-    # Create embedding model in the worker process
-    process_embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+
+    # Create embedding provider in the worker process
+    process_embedding_provider = create_embedding_provider(
+        provider=embedding_provider_name,
+        model=embedding_model_name,
+        api_key=config.get("openai_api_key") if embedding_provider_name == "openai" else None,
+        base_url=config.get("ollama_base_url") if embedding_provider_name == "ollama" else None
+    )
 
     # Create LLM in worker process (can't pickle LLM objects due to thread locks)
     llm = None
@@ -95,7 +102,7 @@ def _process_document_worker(args):
                 file_path,
                 db_path,
                 archive_path,
-                process_embedding_model,
+                process_embedding_provider,
                 llm,
                 llm_has_vision,
                 pdf_pages_to_summarize
@@ -106,7 +113,7 @@ def _process_document_worker(args):
                 file_path,
                 db_path,
                 archive_path,
-                process_embedding_model,
+                process_embedding_provider,
                 llm,
                 llm_has_vision,
                 pdf_pages_to_summarize
@@ -122,7 +129,7 @@ def _process_document_worker(args):
                 file_path,
                 db_path,
                 archive_path,
-                process_embedding_model,
+                process_embedding_provider,
                 attributes,
                 llm,
                 llm_has_vision,
@@ -139,6 +146,8 @@ def main(
     input_path,
     input_type: str = "auto",
     json_attributes: str = None,
+    embedding_provider: str = None,
+    embedding_model: str = None,
     max_workers: int = None,
     model: str = None,
     provider: str = None,
@@ -162,6 +171,12 @@ def main(
     if provider is None:
         provider = config.get("provider")
 
+    # Apply embedding config defaults
+    if embedding_provider is None:
+        embedding_provider = config.get("embedding_provider", "sentence-transformers")
+    if embedding_model is None:
+        embedding_model = config.get("embedding_model")
+
     # Get summarization config
     from bartleby.lib.consts import DEFAULT_PDF_PAGES_TO_SUMMARIZE
     pdf_pages_to_summarize = config.get("pdf_pages_to_summarize", DEFAULT_PDF_PAGES_TO_SUMMARIZE)
@@ -181,7 +196,31 @@ def main(
     archive_path = db_path.parent / "archive"
     archive_path.mkdir(parents=True, exist_ok=True)
 
-    send(f"Embedding model: {EMBEDDING_MODEL}", "BIG")
+    # Create embedding provider and validate dimension
+    embedding_provider_instance = create_embedding_provider(
+        provider=embedding_provider,
+        model=embedding_model,
+        api_key=config.get("openai_api_key") if embedding_provider == "openai" else None,
+        base_url=config.get("ollama_base_url") if embedding_provider == "ollama" else None
+    )
+
+    embedding_dimension = embedding_provider_instance.get_dimension()
+    embedding_model_name = embedding_provider_instance.get_model_name()
+
+    send(f"Embedding: {embedding_provider}/{embedding_model_name} (dim={embedding_dimension})", "BIG")
+
+    # Validate embedding dimension matches database
+    db_dimension = get_embedding_dimension(db_path)
+    if db_dimension and db_dimension != embedding_dimension:
+        send(
+            f"ERROR: Embedding dimension mismatch! Database expects {db_dimension}, "
+            f"but {embedding_model_name} produces {embedding_dimension}. "
+            f"Create a new database or use a compatible embedding model.",
+            "ERROR"
+        )
+        raise ValueError(
+            f"Embedding dimension mismatch: database={db_dimension}, model={embedding_dimension}"
+        )
 
     llm = None
     llm_has_vision = False
@@ -238,12 +277,12 @@ def main(
     type_summary = ", ".join([f"{count} {ftype}" for ftype, count in type_counts.items()])
     send(f"Processing {len(files_to_process)} document(s) ({type_summary}) with {max_workers} workers", "BIG")
 
-    # Use ProcessPoolExecutor instead of ThreadPoolExecutor for SentenceTransformer thread-safety
+    # Use ProcessPoolExecutor instead of ThreadPoolExecutor for embedding provider thread-safety
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        # Prepare arguments for each worker (must be picklable - can't pass LLM objects)
+        # Prepare arguments for each worker (must be picklable - can't pass provider objects)
         worker_args = [
-            (file_path, file_type, db_path, archive_path, provider, model, llm_has_vision,
-             pdf_pages_to_summarize, json_attributes, config, verbose)
+            (file_path, file_type, db_path, archive_path, embedding_provider, embedding_model,
+             provider, model, llm_has_vision, pdf_pages_to_summarize, json_attributes, config, verbose)
             for file_path, file_type in files_to_process
         ]
 

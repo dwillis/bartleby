@@ -52,6 +52,19 @@ def main():
         help="Comma-separated list of JSON attributes to extract (e.g., 'title,content,metadata.author')"
     )
     read_parser.add_argument(
+        "--embedding-provider",
+        type=str,
+        choices=["sentence-transformers", "openai", "ollama"],
+        default=None,
+        help="Embedding provider: sentence-transformers (local), openai, or ollama (default: from config or sentence-transformers)"
+    )
+    read_parser.add_argument(
+        "--embedding-model",
+        type=str,
+        default=None,
+        help="Embedding model name (default: from config or provider-specific default)"
+    )
+    read_parser.add_argument(
         "--max-workers",
         type=int,
         default=None,
@@ -61,14 +74,14 @@ def main():
         "--model",
         type=str,
         default=None,
-        help="LLM model name (e.g., claude-3-5-sonnet-20241022, default: from config)"
+        help="LLM model name for summarization (e.g., claude-3-5-sonnet-20241022, default: from config)"
     )
     read_parser.add_argument(
         "--provider",
         type=str,
         choices=["anthropic", "openai"],
         default=None,
-        help="LLM provider (anthropic or openai, default: from config)"
+        help="LLM provider for summarization (anthropic or openai, default: from config)"
     )
     read_parser.add_argument(
         "--verbose",
@@ -118,13 +131,33 @@ def main():
         if not db_path.exists():
             send(f"Creating database at {db_path}", "BIG")
             from bartleby.read.sqlite import create_db
-            create_db(db_dir)
+            from bartleby.lib.embedding_providers import create_embedding_provider
+            from bartleby.lib.utils import load_config
+
+            # Determine embedding configuration to get dimension
+            config = load_config()
+            embedding_provider_name = args.embedding_provider or config.get("embedding_provider", "sentence-transformers")
+            embedding_model_name = args.embedding_model or config.get("embedding_model")
+
+            # Create temporary embedding provider to get dimension
+            temp_provider = create_embedding_provider(
+                provider=embedding_provider_name,
+                model=embedding_model_name,
+                api_key=config.get("openai_api_key") if embedding_provider_name == "openai" else None,
+                base_url=config.get("ollama_base_url") if embedding_provider_name == "ollama" else None
+            )
+            embedding_dimension = temp_provider.get_dimension()
+
+            create_db(db_dir, embedding_dimension=embedding_dimension)
+            send(f"Database created with embedding dimension: {embedding_dimension}", "BIG")
 
         read_main(
             db_path=db_path,
             input_path=input_path,
             input_type=args.input_type,
             json_attributes=args.json_attributes,
+            embedding_provider=args.embedding_provider,
+            embedding_model=args.embedding_model,
             max_workers=args.max_workers,
             model=args.model,
             provider=args.provider,

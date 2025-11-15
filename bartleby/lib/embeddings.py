@@ -1,9 +1,29 @@
+"""
+Legacy embedding module for backward compatibility.
+
+New code should use bartleby.lib.embedding_providers instead.
+"""
 import numpy as np
 
 from sentence_transformers import SentenceTransformer
 
 
-def embed_chunk(embedding_model: SentenceTransformer, body: str) -> np.ndarray:
+def embed_chunk(embedding_model, body: str) -> np.ndarray:
+    """
+    Generate embedding for a chunk of text.
+
+    Args:
+        embedding_model: Either a SentenceTransformer model (legacy) or EmbeddingProvider instance
+        body: Text to embed
+
+    Returns:
+        Embedding as numpy array
+    """
+    # Check if this is the new EmbeddingProvider interface
+    if hasattr(embedding_model, 'embed'):
+        return embedding_model.embed(body)
+
+    # Legacy SentenceTransformer support
     if not body or not body.strip():
         return np.zeros(embedding_model.get_sentence_embedding_dimension(), dtype=np.float32)
 
